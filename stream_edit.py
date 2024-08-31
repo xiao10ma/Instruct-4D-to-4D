@@ -386,6 +386,7 @@ def nerf_editing(args):
     
     nSamples = min(args.nSamples, cal_n_samples(reso_cur, args.step_ratio))
     
+    # dynamic NeRF
     tensorf = eval(args.model_name)(
         aabb, reso_cur, device,
         density_n_comp=args.n_lamb_sigma, appearance_n_comp=args.n_lamb_sh, app_dim=args.data_dim_color, near_far=test_dataset.near_far, 
@@ -398,6 +399,7 @@ def nerf_editing(args):
         
     tensorf.load(ckpt)
     
+    # load ip2p, raft
     ip2p = SequenceInstructPix2Pix(device=args.ip2p_device, ip2p_use_full_precision=args.ip2p_use_full_precision)
     
     raft = torch.nn.DataParallel(RAFT(args=argparse.Namespace(small=False, mixed_precision=False)))
@@ -432,6 +434,8 @@ def nerf_editing(args):
     
     if not args.ndc_ray:
         allrays, allrgbs = tensorf.filtering_rays(allrays, allrgbs, bbox_only=True)
+
+    
     trainingSampler = MotionSampler(allrgbs, args.num_frames, args.batch_size)
     simpleSampler = SimpleSampler(allrgbs.shape[0], args.num_frames, args.batch_size)
     
