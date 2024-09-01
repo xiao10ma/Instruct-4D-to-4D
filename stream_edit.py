@@ -268,7 +268,7 @@ def compute_bwd_mask(fwd_flow, bwd_flow):
 
     return bwd_mask
 
-
+# 简单 Sampler，随机采样
 class SimpleSampler:
     def __init__(self, total, total_frame, batch):
         self.total = total
@@ -295,12 +295,12 @@ class SimpleSampler:
         self.per_frame_length = int(self.per_frame_length)
         return torch.LongTensor(np.random.permutation(self.per_frame_length))
 
-
+# 基于动作复杂度（幅度）的 Sampler
 class MotionSampler:
     def __init__(self, allrgbs, total_frame, batch):
         self.total = allrgbs.shape[0]
         self.total_frame = total_frame
-        self.batch = batch
+        self.batch = batch      # batch_size
         self.curr = self.total
         self.ids = None
         self.per_frame_length = self.total / self.total_frame 
@@ -435,10 +435,11 @@ def nerf_editing(args):
     if not args.ndc_ray:
         allrays, allrgbs = tensorf.filtering_rays(allrays, allrgbs, bbox_only=True)
 
-    
+    # Sampler, 根据训练的iteration来选择不同的Sampler
     trainingSampler = MotionSampler(allrgbs, args.num_frames, args.batch_size)
     simpleSampler = SimpleSampler(allrgbs.shape[0], args.num_frames, args.batch_size)
     
+    # dynamic nerf related loss
     Ortho_reg_weight = args.Ortho_weight
     print("initial Ortho_reg_weight", Ortho_reg_weight)
 
@@ -452,8 +453,8 @@ def nerf_editing(args):
             if '.th' in f:
                 os.remove(f'{logfolder}/{f}')
                 print(f'removed {logfolder}/{f}')
-        tensorf.save(f'{logfolder}/ckpt-{iteration}.th')
-        print(f'ckpt saved: {logfolder}/ckpt-{iteration}.th')
+        tensorf.save(f'{logfolder}/editted-ckpt-{iteration}.th')
+        print(f'ckpt saved: {logfolder}/editted-ckpt-{iteration}.th')
         
     original_rgbs = allrgbs.clone().view(num_frame, num_cam, H, W, 3) # (num_frame, num_cam, H, W, 3)
     cam_idxs = list(range(0, num_cam)) 
@@ -461,12 +462,14 @@ def nerf_editing(args):
     data_lock = threading.Lock()
     model_lock = threading.Lock()
 
+    # cache
     cache_pts_path = os.path.join(args.cache, args.expname, 'pts_all.pt')
     if os.path.exists(cache_pts_path):
         pts_all = torch.load(cache_pts_path).cpu()
         print('all pts loaded from cache dir')
         torch.cuda.empty_cache()
     else:
+        # 1. key frame depth map
         key_frame_index = 0
         if os.path.exists(os.path.join(args.cache, args.expname, 'depth_all.pt')):
             key_frame_depth_maps = torch.load(os.path.join(args.cache, args.expname, 'depth_all.pt')).cpu()
@@ -486,7 +489,8 @@ def nerf_editing(args):
             print('all depth maps saved to cache dir')
             del depth_map, rays
             torch.cuda.empty_cache()
-            
+        
+        # 2. world space pts
         pts_all = []
         for j in range(num_cam):
             rays = allrays.view(num_frame, num_cam, H*W, -1)[key_frame_index][j] # (H*W, 7)
@@ -504,6 +508,7 @@ def nerf_editing(args):
         del key_frame_depth_maps, pts
         torch.cuda.empty_cache()
     
+    # key frame edit
     def key_frame_update(key_frame:int = 0, warp_ratio:float = 0.5, warm_up_steps:int = 10): 
         print(f'key frame {key_frame} editing')  
         for warm_up_idx in range(warm_up_steps):
@@ -541,7 +546,7 @@ def nerf_editing(args):
             if sample_images_edit.shape[-2:] != (H, W):
                 sample_images_edit = F.interpolate(sample_images_edit, size=(H, W), mode='bilinear', align_corners=False)
                 
-            # warp average among sample images
+            # warp average among sample images (spatial warp)
             for idx_cur, i in enumerate(sample_idxs):
                 warp_average = torch.zeros((H, W, 3), dtype=torch.float32, device=device)
                 weights_mask = torch.zeros((H, W), dtype=torch.float32, device=device)
@@ -635,7 +640,8 @@ def nerf_editing(args):
     keyframe_images = allrgbs.view(num_frame, num_cam, H, W, -1)[0] # (num_cam, H, W, 3)
     keyframe_images = rearrange(keyframe_images, 'f H W C -> f C H W') # (num_cam, 3, H, W)
     torchvision.utils.save_image(keyframe_images, f'{tag}_keyframe_images.png', nrow=args.sequence_length, normalize=True)
-        
+    
+    # all frame edit
     def all_frame_update(key_frame:int = 0):  
         for cam_idx in range(num_cam):
             
