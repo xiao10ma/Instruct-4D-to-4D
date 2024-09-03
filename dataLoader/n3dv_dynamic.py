@@ -5,7 +5,7 @@ import numpy as np
 import os
 from PIL import Image
 from torchvision import transforms as T
-
+from time import time
 from .ray_utils import *
 from .deepview_dynamic import interp_poses
 
@@ -220,6 +220,7 @@ class N3DVDynamicDataset(Dataset):
 
         self.all_rays = []
         self.all_rgbs = []
+        time1 = time()
         for i_frame, frame in enumerate(tqdm(self.frame_list, desc='frame')):
             for i in tqdm(cam_list, desc='camera', leave=False):
                 image_name = f'{all_cams[i]}/{(frame+1):06d}.jpg'
@@ -253,6 +254,8 @@ class N3DVDynamicDataset(Dataset):
         else:
             self.all_rays = torch.stack(self.all_rays, 0)   # (len(self.meta['frames]),h,w, 3)
             self.all_rgbs = torch.stack(self.all_rgbs, 0).reshape(-1,*self.img_wh[::-1], 3)  # (len(self.meta['frames]),h,w,3)
+        time2 = time()
+        print("takes time: " + str(time2 - time1))
 
 
     def define_transforms(self):
