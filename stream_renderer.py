@@ -3,7 +3,7 @@ from copy import deepcopy
 from tqdm.auto import tqdm
 from dataLoader.ray_utils import get_rays
 from models.stream_tensoRF import raw2alpha, StreamTensorVMSplit, StreamTensorCP, AlphaGridMask
-from utils import *
+from utility import *
 from dataLoader.ray_utils import ndc_rays_blender
 
 
