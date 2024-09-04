@@ -219,6 +219,15 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         fovx = contents["camera_angle_x"]
         
     frames = contents["frames"]
+
+    sample_frames = []
+
+    # video's total length is 300
+    for i in range(0, len(frames), 300):
+        chunk = frames[i:i+300]
+        sample_frames.extend(chunk[:50])
+
+
     tbar = tqdm(range(len(frames)))
     def frame_read_fn(idx_frame):
         idx = idx_frame[0]
@@ -300,7 +309,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                             image_path=image_path, image_name=image_name, width=width, height=height, timestamp=timestamp)
     
     with ThreadPool() as pool:
-        cam_infos = pool.map(frame_read_fn, zip(list(range(len(frames))), frames))
+        cam_infos = pool.map(frame_read_fn, zip(list(range(len(sample_frames))), sample_frames))
         pool.close()
         pool.join()
         

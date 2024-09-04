@@ -17,7 +17,7 @@ ModelParams:
   resolution: 4           # 目前显存不太够
   white_background: False
   data_device: "cuda"
-  eval: True
+  eval: True          # for render
   extension: ".png"
   num_extra_pts: 0
   loaded_pth: ""

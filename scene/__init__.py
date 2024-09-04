@@ -32,6 +32,7 @@ class Scene:
         self.loaded_iter = None
         self.gaussians = gaussians
         self.white_background = args.white_background
+        self.num_frames = args.num_frames
 
         if load_iteration:
             if load_iteration == -1:
@@ -92,10 +93,10 @@ class Scene:
         torch.save((self.gaussians.capture(), iteration), self.model_path + "/chkpnt" + str(iteration) + ".pth")
 
     def getTrainCameras(self, scale=1.0):
-        return CameraDataset(self.train_cameras[scale].copy(), self.white_background)
+        return CameraDataset(self.train_cameras[scale].copy(), self.white_background, self.num_frames)
         
     def getTestCameras(self, scale=1.0):
-        return CameraDataset(self.test_cameras[scale].copy(), self.white_background)
+        return CameraDataset(self.test_cameras[scale].copy(), self.white_background, self.num_frames)
     
     # def getKeyCameras(self, scale=1.0):
     #     return CameraDataset(self.key_frames[scale].copy(), self.white_background)
