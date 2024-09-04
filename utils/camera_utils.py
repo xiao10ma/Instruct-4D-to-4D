@@ -70,11 +70,13 @@ def loadCam(args, id, cam_info, resolution_scale):
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = []
-
+    image_list = []
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale))
+        cam = loadCam(args, id, c, resolution_scale)
+        camera_list.append(cam)
+        image_list.append(cam.image)
 
-    return camera_list
+    return camera_list, image_list
 
 def camera_to_JSON(id, camera : Camera):
     Rt = np.zeros((4, 4))

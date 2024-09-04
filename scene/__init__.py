@@ -32,6 +32,7 @@ class Scene:
         self.loaded_iter = None
         self.gaussians = gaussians
         self.white_background = args.white_background
+        self.num_frames= args.num_frames
 
         if load_iteration:
             if load_iteration == -1:
@@ -73,9 +74,9 @@ class Scene:
 
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            self.train_cameras[resolution_scale], self.train_time_cam_images = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+            self.test_cameras[resolution_scale], self.test_time_cam_images = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
 
         if args.loaded_pth:
             self.gaussians.create_from_pth(args.loaded_pth, self.cameras_extent)
@@ -92,10 +93,11 @@ class Scene:
         torch.save((self.gaussians.capture(), iteration), self.model_path + "/chkpnt" + str(iteration) + ".pth")
 
     def getTrainCameras(self, scale=1.0):
-        return CameraDataset(self.train_cameras[scale].copy(), self.white_background)
+        return CameraDataset(self.train_cameras[scale].copy(), self.train_time_cam_images.copy(), self.white_background)
         
     def getTestCameras(self, scale=1.0):
-        return CameraDataset(self.test_cameras[scale].copy(), self.white_background)
+        return CameraDataset(self.test_cameras[scale].copy(), self.test_time_cam_images.copy(), self.white_background)
     
-    # def getKeyCameras(self, scale=1.0):
-    #     return CameraDataset(self.key_frames[scale].copy(), self.white_background)
+    def getKeyCameras(self, scale=1.0):
+        key_frame_cameras = self.train_cameras[scale][0:len(self.train_cameras[scale]):self.num_frames]
+        return CameraDataset(key_frame_cameras[scale].copy(), self.white_background)
