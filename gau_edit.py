@@ -239,16 +239,16 @@ def gaussian_editing(args, dataset, opt, pipe):
     num_cam = len([f for f in os.listdir(args.source_path) if f.endswith('.mp4')])
 
     # load ip2p, raft
-    ip2p = SequenceInstructPix2Pix(device=args.ip2p_device, ip2p_use_full_precision=args.ip2p_use_full_precision)
+    # ip2p = SequenceInstructPix2Pix(device=args.ip2p_device, ip2p_use_full_precision=args.ip2p_use_full_precision)
     
-    raft = torch.nn.DataParallel(RAFT(args=Namespace(small=False, mixed_precision=False)))
-    raft.load_state_dict(torch.load(args.raft_ckpt))
-    raft = raft.module
+    # raft = torch.nn.DataParallel(RAFT(args=Namespace(small=False, mixed_precision=False)))
+    # raft.load_state_dict(torch.load(args.raft_ckpt))
+    # raft = raft.module
     
-    raft = raft.to(args.ip2p_device)
-    raft.requires_grad_(False)
-    raft.eval()
-    print('RAFT loaded!')
+    # raft = raft.to(args.ip2p_device)
+    # raft.requires_grad_(False)
+    # raft.eval()
+    # print('RAFT loaded!')
 
     # Sampler, 根据训练的iteration来选择不同的Sampler
     # trainingSampler = MotionSampler(allrgbs, args.num_frames, args.batch_size)

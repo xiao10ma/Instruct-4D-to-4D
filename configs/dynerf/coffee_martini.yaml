@@ -22,7 +22,7 @@ ModelParams:
   num_extra_pts: 0
   loaded_pth: ""
   frame_ratio: 1
-  dataloader: True
+  dataloader: False
   edit_task: False
   num_frames: 50
 

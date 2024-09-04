@@ -14,7 +14,7 @@ import ipdb
 
 class CameraDataset(Dataset):
     
-    def __init__(self, viewpoint_stack, white_background, num_frame=300):
+    def __init__(self, cam_time_image, viewpoint_stack, white_background, num_frame=300):
         self.num_cam = len(viewpoint_stack) // num_frame
         self.viewpoint_stack = viewpoint_stack
         self.bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
