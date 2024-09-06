@@ -22,14 +22,14 @@ ModelParams:
   num_extra_pts: 0
   loaded_pth: ""
   frame_ratio: 1
-  dataloader: False
-  edit_task: False
-  num_frames: 50
+  dataloader: True
+  edit_task: True
+  num_frames: 2
 
 PipelineParams:
   convert_SHs_python: False
   compute_cov3D_python: False
-  debug: False
+  debug: True
   env_map_res: 500
   env_optimize_until: 5000
   env_optimize_from: 0

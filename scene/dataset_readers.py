@@ -148,7 +148,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(edit_task, path, images, eval, llffhold=8, num_pts_ratio=1.0):
+def readColmapSceneInfo(num_frames, edit_task, path, images, eval, llffhold=8, num_pts_ratio=1.0):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -210,7 +210,7 @@ def readColmapSceneInfo(edit_task, path, images, eval, llffhold=8, num_pts_ratio
                            ply_path=ply_path)
     return scene_info
 
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", time_duration=None, frame_ratio=1, dataloader=False):
+def readCamerasFromTransforms(num_frame, path, transformsfile, white_background, extension=".png", time_duration=None, frame_ratio=1, dataloader=False):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
@@ -225,10 +225,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
     # video's total length is 300
     for i in range(0, len(frames), 300):
         chunk = frames[i:i+300]
-        sample_frames.extend(chunk[:50])
+        sample_frames.extend(chunk[:num_frame])
 
 
-    tbar = tqdm(range(len(frames)))
+    tbar = tqdm(range(len(frames) // 300 * num_frame))
     def frame_read_fn(idx_frame):
         idx = idx_frame[0]
         frame = idx_frame[1]
@@ -317,12 +317,12 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
     
     return cam_infos
 
-def readNerfSyntheticInfo(edit_task, path, white_background, eval, extension=".png", num_pts=100_000, time_duration=None, num_extra_pts=0, frame_ratio=1, dataloader=False):
+def readNerfSyntheticInfo(num_frame, edit_task, path, white_background, eval, extension=".png", num_pts=100_000, time_duration=None, num_extra_pts=0, frame_ratio=1, dataloader=False):
     
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension, time_duration=time_duration, frame_ratio=frame_ratio, dataloader=dataloader)
+    train_cam_infos = readCamerasFromTransforms(num_frame, path, "transforms_train.json", white_background, extension, time_duration=time_duration, frame_ratio=frame_ratio, dataloader=dataloader)
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json" if not path.endswith('lego') else "transforms_val.json", white_background, extension, time_duration=time_duration, frame_ratio=frame_ratio, dataloader=dataloader)
+    test_cam_infos = readCamerasFromTransforms(num_frame, path, "transforms_test.json" if not path.endswith('lego') else "transforms_val.json", white_background, extension, time_duration=time_duration, frame_ratio=frame_ratio, dataloader=dataloader)
     
     if not eval or edit_task:
         train_cam_infos.extend(test_cam_infos)

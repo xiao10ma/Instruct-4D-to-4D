@@ -9,13 +9,14 @@ from utils.graphics_utils import getWorld2View2
 from multiprocessing.pool import ThreadPool
 from tqdm import tqdm
 from torchvision import transforms as T
-from line_profiler import LineProfiler
 import ipdb
 
 class CameraDataset(Dataset):
     
-    def __init__(self, cam_time_image, viewpoint_stack, white_background, num_frame=300):
-        self.num_cam = len(viewpoint_stack) // num_frame
+    def __init__(self, viewpoint_stack, white_background, num_frame=300):
+        self.total_frames_cnt = len(viewpoint_stack)
+        self.num_frame = num_frame
+        self.num_cam = self.total_frames_cnt // num_frame
         self.viewpoint_stack = viewpoint_stack
         self.bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
 
@@ -24,7 +25,7 @@ class CameraDataset(Dataset):
 
         self.define_transforms()
 
-        tbar = tqdm(range(len(viewpoint_stack)),desc="Reading Images")
+        tbar = tqdm(range(self.total_frames_cnt),desc="Reading Images")
 
         def process_viewpoint(viewpoint_cam, bg):
             if viewpoint_cam.meta_only:
@@ -45,7 +46,7 @@ class CameraDataset(Dataset):
             tbar.update(1)
             return viewpoint_image
 
-        with ThreadPool() as pool:
+        with ThreadPool(128) as pool:
             results = pool.map(
                 lambda viewpoint_cam: process_viewpoint(viewpoint_cam, bg=self.bg),
                 viewpoint_stack
@@ -53,8 +54,8 @@ class CameraDataset(Dataset):
 
         self.time_cam_image = torch.stack(results, 0) # [num_frame * num_cam, C, H, W]
 
-        for i in range(0, len(viewpoint_stack), num_frame):
-            self.getIn_Ex_trinsics(i // 300, viewpoint_stack[i])
+        for i in range(0, self.total_frames_cnt, num_frame):
+            self.getIn_Ex_trinsics(i // num_frame, viewpoint_stack[i])
 
     def __getitem__(self, index):
         viewpoint_cam = self.viewpoint_stack[index]
@@ -90,3 +91,9 @@ class CameraDataset(Dataset):
 
     def define_transforms(self):
         self.transform = T.ToTensor()
+
+    def next_view(self, timestamp):
+        image = self.time_cam_image[timestamp::self.num_frame] # [num_cam, C, H, W]
+        viewpoint_cam = self.viewpoint_stack[timestamp::self.num_frame]
+
+        return image, viewpoint_cam

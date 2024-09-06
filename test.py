@@ -1,21 +1,4 @@
-#%%
-import threading
-import time
+import torch
 
-def test():
-
-    for i in range(5):
-        print(threading.current_thread().name+' test ',i)
-        time.sleep(0.5)
-
-
-thread = threading.Thread(target=test,name='TestThread')
-thread.start()
-thread.join()
-
-for i in range(5):
-    print(threading.current_thread().name+' main ', i)
-    print(thread.name+' is alive ', thread.is_alive())
-    time.sleep(1)
-
-# %%
+data = torch.load('/data1/mazipei/Instruct-4D-to-4D/snapshot_fw.dump')
+pass

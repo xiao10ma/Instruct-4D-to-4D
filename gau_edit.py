@@ -23,6 +23,9 @@ from einops import rearrange
 import datetime
 import threading
 import math
+import sys
+import cv2
+from utils.loss_utils import l1_loss, ssim, msssim
 import ipdb
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -72,7 +75,11 @@ def warp_pts_BfromA(intriA, w2cA, depthA, intriB, w2cB):
     H, W = depthA.shape
 
     # Create a meshgrid for the pixel coordinates
-    y, x = torch.meshgrid(torch.arange(H, device=depthA.device), torch.arange(W, device=depthA.device))
+    y, x = torch.meshgrid(
+        torch.arange(H, device=depthA.device, dtype=torch.float32), 
+        torch.arange(W, device=depthA.device, dtype=torch.float32), 
+        indexing='ij'
+    )
     x = x.flatten()
     y = y.flatten()
 
@@ -103,7 +110,8 @@ def apply_warp(
     imgA: torch.Tensor, 
     imgB: torch.Tensor,
     u=None, d=None, l=None, r=None, 
-    default=torch.tensor([0, 0, 0]) 
+    default=torch.tensor([0, 0, 0]),
+    threshold=0.01
 ):
     """
     Warp imgB to imgA based on precomputed correspondence AfromB.
@@ -114,6 +122,7 @@ def apply_warp(
         imgB: Source image B, shape (H, W, C).
         u, d, l, r: Bounds for cropping the image.
         default: Default color for out-of-boundary pixels or mismatches.
+        threshold: Threshold to filter out less accurate warps.
     
     Returns:
         imgA_warped: Warped image with pixels from imgB.
@@ -129,10 +138,14 @@ def apply_warp(
     # Calculate the mask for valid coordinates within bounds
     mask = (u <= X) & (X < d) & (l <= Y) & (Y < r)
     
+    # 引入一个基于阈值的附加过滤条件，过滤掉不准确的映射点
+    delta = torch.sqrt((X - torch.round(X)) ** 2 + (Y - torch.round(Y)) ** 2)
+    mask &= delta < threshold
+    
     # Normalize the coordinates to [-1, 1] for grid_sample
     X_norm = ((X - u) / (d - 1 - u) * 2 - 1) * mask
     Y_norm = ((Y - l) / (r - 1 - l) * 2 - 1) * mask
-    pix = torch.stack([-Y_norm, X_norm], dim=-1).unsqueeze(0)  # shape (1, H, W, 2)
+    pix = torch.stack([Y_norm, X_norm], dim=-1).unsqueeze(0)  # shape (1, H, W, 2)
     
     # Warp imgB to imgA using grid_sample
     imgA_warped = F.grid_sample(imgB.permute(2, 0, 1).unsqueeze(0), pix, mode='bilinear', align_corners=True)
@@ -144,74 +157,37 @@ def apply_warp(
     return imgA_warped, mask
 
 
+def warp_flow(img, flow): 
+    # warp image according to flow
+    h, w = flow.shape[:2]
+    flow_new = flow.copy() 
+    flow_new[:, :, 0] += np.arange(w) 
+    flow_new[:, :, 1] += np.arange(h)[:, np.newaxis] 
 
-# 简单 Sampler，随机采样
-class SimpleSampler:
-    def __init__(self, total_frame, batch):
-        self.total_frame = total_frame
-        self.batch = batch
-        self.permute_base = self.gen_permute()
+    res = cv2.remap(
+        img, flow_new, None, cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT
+    )
+    return res
 
-    def nextids(self):
-        frame = int(random.random()*self.total_frame)
-        start = int(random.random()*(len(self.permute_base)-self.batch))
-        return self.permute_base[start:start+self.batch]+frame*self.per_frame_length
 
-    def gen_permute(self):
-        self.per_frame_length = self.total / self.total_frame
-        assert self.per_frame_length.is_integer()
-        self.per_frame_length = int(self.per_frame_length)
-        return torch.LongTensor(np.random.permutation(self.per_frame_length))
+def compute_bwd_mask(fwd_flow, bwd_flow):
+    # compute the backward mask
+    alpha_1 = 0.5 
+    alpha_2 = 0.5
 
-# 基于动作复杂度（幅度）的 Sampler
-# class MotionSampler:
-#     def __init__(self, allrgbs, total_frame, batch):
-#         self.total = allrgbs.shape[0]
-#         self.total_frame = total_frame
-#         self.batch = batch      # batch_size
-#         self.curr = self.total
-#         self.ids = None
-#         self.per_frame_length = self.total / self.total_frame 
-#         assert self.per_frame_length.is_integer()
-#         self.per_frame_length = int(self.per_frame_length) 
-#         self.permute_base = torch.LongTensor(np.random.permutation(self.per_frame_length)) 
-#         motion_mask = (allrgbs-torch.roll(allrgbs,self.per_frame_length,0)).abs().mean(-1)>(10/255) 
-#         get_mask = lambda x: motion_mask[x*self.per_frame_length:(x+1)*self.per_frame_length] 
-#         self.mi = {} # motion index
-#         for k in range(self.total_frame):
-#             # nearby 5 frames
-#             current_mask = get_mask(k) 
-#             for i in range(1,6): 
-#                 if k-i >= 0: 
-#                     current_mask = current_mask|get_mask(k-i) 
-#                 if k+i < self.total_frame: 
-#                     current_mask = current_mask|get_mask(k+i) 
-#             mask_idx = current_mask.nonzero()
-#             if len(mask_idx)>0: 
-#                 self.mi[k] = mask_idx[:,0] 
-#             else:
-#                 self.mi[k] = []
-#         self.motion_num = self.batch//10
+    fwd2bwd_flow = warp_flow(fwd_flow, bwd_flow)
+    bwd_lr_error = np.linalg.norm(bwd_flow + fwd2bwd_flow, axis=-1)
 
-#     def nextids(self):
-#         # self.curr+=self.batch
-#         # if self.curr + self.batch > self.total:
-#         #     self.ids = self.gen_permute()
-#         #     self.curr = 0
-#         # return self.ids[self.curr:self.curr+self.batch]
-#         frame = int(random.random()*self.total_frame)
-#         start = int(random.random()*(len(self.permute_base)))
-#         m_num = len(self.mi[frame])
-#         if m_num > 0:
-#             if m_num < self.motion_num:
-#                 m_idx = self.mi[frame][torch.randperm(self.motion_num)%m_num]
-#             else:
-#                 m_idx = self.mi[frame][torch.randperm(m_num)[:self.motion_num]]
-#         else:
-#             m_idx = self.permute_base[:1]
-#         # start = int(random.random()*(len(self.permute_base)-self.batch+len(m_idx)))
-#         end = min(start+self.batch-len(m_idx), self.per_frame_length)
-#         return  torch.cat([m_idx, self.permute_base[start:end]],0)+frame*self.per_frame_length
+    bwd_mask = (
+        bwd_lr_error
+        < alpha_1
+        * (np.linalg.norm(bwd_flow, axis=-1) + np.linalg.norm(fwd2bwd_flow, axis=-1))
+        + alpha_2
+    )
+
+    return bwd_mask
+
+    
 
 def gaussian_editing(args, dataset, opt, pipe):
     # log
@@ -239,16 +215,16 @@ def gaussian_editing(args, dataset, opt, pipe):
     num_cam = len([f for f in os.listdir(args.source_path) if f.endswith('.mp4')])
 
     # load ip2p, raft
-    # ip2p = SequenceInstructPix2Pix(device=args.ip2p_device, ip2p_use_full_precision=args.ip2p_use_full_precision)
+    ip2p = SequenceInstructPix2Pix(device=args.ip2p_device, ip2p_use_full_precision=args.ip2p_use_full_precision)
     
-    # raft = torch.nn.DataParallel(RAFT(args=Namespace(small=False, mixed_precision=False)))
-    # raft.load_state_dict(torch.load(args.raft_ckpt))
-    # raft = raft.module
+    raft = torch.nn.DataParallel(RAFT(args=Namespace(small=False, mixed_precision=False)))
+    raft.load_state_dict(torch.load(args.raft_ckpt))
+    raft = raft.module
     
-    # raft = raft.to(args.ip2p_device)
-    # raft.requires_grad_(False)
-    # raft.eval()
-    # print('RAFT loaded!')
+    raft = raft.to(args.ip2p_device)
+    raft.requires_grad_(False)
+    raft.eval()
+    print('RAFT loaded!')
 
     # Sampler, 根据训练的iteration来选择不同的Sampler
     # trainingSampler = MotionSampler(allrgbs, args.num_frames, args.batch_size)
@@ -265,8 +241,9 @@ def gaussian_editing(args, dataset, opt, pipe):
         print('all depth maps loaded from cache dir')
         torch.cuda.empty_cache()
     else:
+        cache_path = os.path.join(args.cache_path, args.exp_name)
+        os.makedirs(cache_path, exist_ok=True)
         key_frame_depth_maps = []
-        # TODO：这里 getKeyCameras 尚未实现，应该是 key frame，我看完edit key frame再决定
         key_frame_dataset = scene.getKeyCameras()
 
         with torch.no_grad():
@@ -275,21 +252,22 @@ def gaussian_editing(args, dataset, opt, pipe):
                 viewpoint_cam = viewpoint_cam.cuda()
 
                 depth_map = render(viewpoint_cam, gaussians, pipe, background)["depth"] # (1, H, W)
-                depth_map = depth_map.permute(1, 2, 0).view(-1, 1).cpu() # (H * W, 1)
-                key_frame_depth_maps.append(depth_map)
-            key_frame_depth_maps = torch.stack(key_frame_depth_maps, dim=0) # [cam_num, H * W, 1]
+                key_frame_depth_maps.append(depth_map.squeeze(0))
+            key_frame_depth_maps = torch.stack(key_frame_depth_maps, dim=0) # [cam_num, H, W]
             torch.save(key_frame_depth_maps, cache_depth_path)
             print("all key frame's depth maps saved to cache dir")
             torch.cuda.empty_cache()
     
-    all_rgbs = time_cam_dataset.time_cam_image # [num_frame, num_cam, 3, H, W]
+    all_rgbs = time_cam_dataset.time_cam_image.to(device) # [num_frame * num_cam, 3, H, W], cuda 0
     H, W = all_rgbs.shape[-2:]
-    original_rgbs = time_cam_dataset.time_cam_image.clone() # [num_frame, num_cam, 3, H, W]
+    all_rgbs = all_rgbs.view(num_cam, dataset.num_frames, 3, H, W).permute(1, 0, 2, 3, 4) # [num_frame, num_cam, 3, H, W]
+    original_rgbs = all_rgbs.clone() # [num_frame, num_cam, 3, H, W]
     cam_idxs = list(range(0, num_cam))
 
     # thread lock for data and model
     data_lock = threading.Lock()
-    model_lock = threading.Lock()
+
+    os.makedirs('output/vis', exist_ok=True)
 
     def key_frame_edit(key_frame:int = 0, warp_ratio:float = 0.5, warm_up_steps:int = 12):
         print(f'key frame {key_frame} editing')
@@ -297,14 +275,14 @@ def gaussian_editing(args, dataset, opt, pipe):
             sample_idxs = sorted(list(np.random.choice(cam_idxs, args.sequence_length, replace=False)))
             remain_idxs = sorted(list(set(cam_idxs) - set(sample_idxs)))
 
-            sample_images = all_rgbs[key_frame][sample_idxs].to(device) # [sample_length, 3, H, W]
-            sample_images_cond = original_rgbs[key_frame][sample_idxs].to(device) # [sample_length, 3, H, W]
+            sample_images = all_rgbs[key_frame][sample_idxs] # [sample_length, 3, H, W], cuda 0
+            sample_images_cond = original_rgbs[key_frame][sample_idxs] # [sample_length, 3, H, W], cuda 0
 
-            remain_images = all_rgbs[key_frame][remain_idxs].to(device) # [remain_length, 3, H, W]
-            remain_images_cond = original_rgbs[key_frame][remain_idxs].to(device) # [remain_length, 3, H, W]
+            remain_images = all_rgbs[key_frame][remain_idxs] # [remain_length, 3, H, W], cuda 0
+            remain_images_cond = original_rgbs[key_frame][remain_idxs] # [remain_length, 3, H, W], cuda 0
 
-            torchvision.utils.save_image(sample_images, f'{tag}_sample_images.png', nrow=sample_images.shape[0], normalize=True)
-            torchvision.utils.save_image(sample_images_cond, f'{tag}_sample_images_cond.png', nrow=sample_images_cond.shape[0], normalize=True)
+            torchvision.utils.save_image(sample_images, f'output/vis/{tag}/sample_images.png', nrow=sample_images.shape[0], normalize=True)
+            torchvision.utils.save_image(sample_images_cond, f'output/vis/{tag}/sample_images_cond.png', nrow=sample_images_cond.shape[0], normalize=True)
 
             # cosine annealing
             scale_min, scale_max = 0.8, 1.0
@@ -318,18 +296,20 @@ def gaussian_editing(args, dataset, opt, pipe):
                 prompt=args.prompt,
                 noisy_latent_type="noisy_latent",
                 T=int(1000 * scale),
-            ) # (1, C, f, H, W)
+            ) # (1, C, f, H, W), cuda 0
 
-            sample_images_edit = rearrange(sample_images_edit, '1 C f H W -> f C H W').to(device, dtype=torch.float32) # (f, C, H, W)
+            sample_images_edit = rearrange(sample_images_edit, '1 C f H W -> f C H W').to(device, dtype=torch.float32) # (f, C, H, W), cuda 0
             if sample_images_edit.shape[-2:] != (H, W):
                 sample_images_edit = F.interpolate(sample_images_edit, size=(H, W), mode='bilinear', align_corners=False)
 
+            torchvision.utils.save_image(sample_images_edit, f'output/vis/{tag}/{warm_up_idx}_sample_images_edit_before.png', nrow=sample_images_edit.shape[0], normalize=True)
+
             # spatial warp (based on depth map, see ViCA-NeRF)
             for idx_cur, i in enumerate(sample_idxs):
-                warp_average = torch.zeros((H, W, 3), dtype=torch.float32, device=device)
-                weights_mask = torch.zeros((H, W), dtype=torch.float32, device=device)
-                intrinsic_cur = time_cam_dataset.intrinsics[i]
-                extrinsic_cur = time_cam_dataset.extrinsics[i]
+                warp_average = torch.zeros((H, W, 3), dtype=torch.float32, device=device) # cuda 0
+                weights_mask = torch.zeros((H, W), dtype=torch.float32, device=device) # cuda 0
+                intrinsic_cur = time_cam_dataset.intrinsics[i] # cpu
+                extrinsic_cur = time_cam_dataset.extrinsics[i] # cpu 
                 for idx_ref, j in enumerate(sample_idxs):
                     intrinsic_ref = time_cam_dataset.intrinsics[j]
                     extrinsic_ref = time_cam_dataset.extrinsics[j]
@@ -337,10 +317,11 @@ def gaussian_editing(args, dataset, opt, pipe):
                     # 1. warp A's pixels to B (find the correspondence)
                     # 2. use B' pixels to paint A
                     # every coordinate of A has its corresponding coordinate in B, which size is 2
-                    warp_cur_from_ref = warp_pts_BfromA(intrinsic_cur, extrinsic_cur, key_frame_depth_maps[i], intrinsic_ref, extrinsic_ref) # (H, W, 2)
-                    image_ref = sample_images_edit[idx_ref].permute(1, 2, 0).float()
-                    image_cur = sample_images_edit[idx_cur].permute(1, 2, 0).float()
-                    warp, mask = apply_warp(warp_cur_from_ref, image_cur, image_ref)
+                    warp_cur_from_ref = warp_pts_BfromA(intrinsic_cur, extrinsic_cur, key_frame_depth_maps[i], intrinsic_ref, extrinsic_ref) # (H, W, 2), cpu
+                    warp_cur_from_ref = warp_cur_from_ref.to(device) # (H, W, 2), cuda 0
+                    image_ref = sample_images_edit[idx_ref].permute(1, 2, 0).float() # cuda 0
+                    image_cur = sample_images_edit[idx_cur].permute(1, 2, 0).float() # cuda 0
+                    warp, mask = apply_warp(warp_cur_from_ref, image_cur, image_ref) # cuda 0
                     weight = (mask != 0).sum() / (mask).numel()
                     warp_average[mask] += warp[mask] * weight
                     weights_mask[mask] += weight
@@ -349,18 +330,205 @@ def gaussian_editing(args, dataset, opt, pipe):
                 warp_average[average_mask] /= weights_mask[average_mask].unsqueeze(-1)
                 sample_images_edit[idx_cur].permute(1, 2, 0)[average_mask] = warp_average[average_mask]
 
-            torchvision.utils.save_image(sample_images_edit, f'{tag}_sample_images_edit.png', nrow=sample_images_edit.shape[0], normalize=True)
-            torchvision.utils.save_image(remain_images, f'{tag}_remain_images.png', nrow=remain_images.shape[0], normalize=True)
+            torchvision.utils.save_image(sample_images_edit, f'output/vis/{tag}/{warm_up_idx}_sample_images_edit_after.png', nrow=sample_images_edit.shape[0], normalize=True)
+            torchvision.utils.save_image(remain_images, f'output/vis/{tag}/remain_images.png', nrow=remain_images.shape[0], normalize=True)
 
+            # spatial warp (based on depth map, see ViCA-NeRF)
+            remain_images_warped = remain_images.clone()
+            for idx_cur, i in enumerate(remain_idxs):
+                warp_average = torch.zeros((H, W, 3), dtype=torch.float32, device=device) # (H, W, 3)
+                weights_mask = torch.zeros((H, W), dtype=torch.float32, device=device) # (H, W)
+                intrinsic_cur = time_cam_dataset.intrinsics[i] # cpu
+                extrinsic_cur = time_cam_dataset.extrinsics[i] # cpu 
+                for idx_ref, j in enumerate(sample_idxs):
+                    intrinsic_ref = time_cam_dataset.intrinsics[j]
+                    extrinsic_ref = time_cam_dataset.extrinsics[j]
+                    warp_cur_from_ref = warp_pts_BfromA(intrinsic_cur, extrinsic_cur, key_frame_depth_maps[i], intrinsic_ref, extrinsic_ref) # (H, W, 2), cpu
+                    warp_cur_from_ref = warp_cur_from_ref.to(device) # (H, W, 2), cuda 0
+                    image_ref = sample_images_edit[idx_ref].permute(1, 2, 0).float() # cuda 0
+                    image_cur = remain_images[idx_cur].permute(1, 2, 0).float() # cuda 0
+                    warp, mask = apply_warp(warp_cur_from_ref, image_cur, image_ref) # cuda 0
+                    weight = (mask != 0).sum() / (mask).numel()
+                    warp_average[mask] += warp[mask] * weight
+                    weights_mask[mask] += weight
+                
+                average_mask = (weights_mask != 0)
+                warp_average[average_mask] /= weights_mask[average_mask].unsqueeze(-1)
+                remain_images_warped[idx_cur].permute(1, 2, 0)[average_mask] = warp_average[average_mask] * warp_ratio + remain_images[idx_cur].permute(1, 2, 0)[average_mask] * (1-warp_ratio)
+            
+            torchvision.utils.save_image(remain_images_warped, f'output/vis/{tag}/remain_images_warped.png', nrow=remain_images_warped.shape[0], normalize=True)
+
+            if warm_up_idx == warm_up_steps-1:
+                for i in range(0, remain_images_warped.shape[0], args.sequence_length):
+                    anchor_idx = min(i, remain_images_warped.shape[0]-1)
+                    anchor_image = remain_images_warped[anchor_idx].unsqueeze(0)
+                    anchor_image_cond = remain_images_cond[anchor_idx].unsqueeze(0)
+
+                    start_idx = i
+                    end_idx = min(i + args.sequence_length, remain_images_warped.shape[0])
+                    selected_remain_images_warped = remain_images_warped[start_idx:end_idx] # (seq_len, 3, H, W)
+                    selected_remain_images_cond = remain_images_cond[start_idx:end_idx] # (seq_len, 3, H, W)
+
+                    images_input = torch.cat([anchor_image, selected_remain_images_warped], dim=0)
+                    images_cond = torch.cat([anchor_image_cond, selected_remain_images_cond], dim=0)
+
+                    images_edit = ip2p.edit_sequence(
+                        images=images_input.unsqueeze(0), # (1, seq_length + 1, C, H, W)
+                        images_cond=images_cond.unsqueeze(0), # (1, seq_length + 1, C, H, W)
+                        guidance_scale=args.guidance_scale,
+                        image_guidance_scale=args.image_guidance_scale,
+                        diffusion_steps=args.restview_refine_diffusion_steps,
+                        prompt=args.prompt,
+                        noisy_latent_type="noisy_latent",
+                        T=args.restview_refine_num_steps,
+                    ) # (1, C, f, H, W)
+
+                    images_edit = rearrange(images_edit, '1 C f H W -> f C H W').to(device, dtype=torch.float32) # (f, C, H, W)
+                    if images_edit.shape[-2:] != (H, W):
+                        images_edit = F.interpolate(images_edit, size=(H, W), mode='bilinear', align_corners=False)
+                    
+                    images_edit = images_edit[1:] # (seq_len, C, H, W)
+                    remain_images_warped[start_idx:end_idx] = images_edit
+
+                torchvision.utils.save_image(remain_images_warped, f'output/vis/{tag}/remain_images_warped_refined.png', nrow=remain_images_warped.shape[0], normalize=True)
+
+
+            all_rgbs.view(dataset.num_frames, num_cam, 3, H, W)[key_frame][sample_idxs] = sample_images_edit
+            all_rgbs.view(dataset.num_frames, num_cam, 3, H, W)[key_frame][remain_idxs] = remain_images_warped
 
 
 
     key_frame_edit(key_frame=0, warp_ratio=0.5, warm_up_steps=2)
     print("Key frame editing done!")
 
-    keyframe_images = time_cam_dataset.time_cam_image[0] # [num_cam, H, W, 3]
-    keyframe_images = rearrange(keyframe_images, 'f H W C -> f C H W')  # [num_cam, 3, H, W]
-    torchvision.utils.save_image(keyframe_images, f'{tag}_keyframe_images.png', nrow=args.sequence_length, normalize=True)
+    keyframe_images = all_rgbs[0] # [num_cam, 3, H, W]
+    torchvision.utils.save_image(keyframe_images, f'output/vis/{tag}/keyframe_images.png', nrow=args.sequence_length, normalize=True)
+
+    # all frame edit
+    def all_frame_update(key_frame:int=0):
+        for cam_idx in range(num_cam):
+
+            # edited key frame (cam_idx is the key pseudo view)
+            keyframe_image = all_rgbs[key_frame, cam_idx].unsqueeze(0) # (1, C, H, W)
+            keyframe_image_cond = original_rgbs[key_frame, cam_idx].unsqueeze(0) # (1, C, H, W)
+
+            for frame_idx in range(0, dataset.num_frames, args.sequence_length):
+                start_idx = frame_idx
+                end_idx = min(frame_idx + args.sequence_length, dataset.num_frames)
+                selected_frame_idxs = list(range(start_idx, end_idx))
+                sequence_length = len(selected_frame_idxs)
+
+                images = all_rgbs[selected_frame_idxs, cam_idx] # (f, C, H, W), current sliding window's images
+                images_cond = original_rgbs[selected_frame_idxs, cam_idx] # (f, C, H, W), current sliding window's condition images
+
+                for i in range(0, sequence_length):
+                    if start_idx == 0 and i == 0:
+                        continue
+                    # referrence is the last frame of the previous sliding window
+                    ref_idx = max(start_idx - 1, 0)
+                    ref_image = all_rgbs[ref_idx, cam_idx].unsqueeze(0) # (1, 3, H, W)
+                    ref_image_cond = original_rgbs[ref_idx, cam_idx].unsqueeze(0) # (1, 3, H, W)
+
+                    cur_image = images[i].unsqueeze(0) # (1, 3, H, W)
+                    cur_image_cond = images_cond[i].unsqueeze(0) # (1, 3, H, W)
+
+                    ref_image = (ref_image * 255.0).float().to(args.ip2p_device)
+                    ref_image_cond = (ref_image_cond * 255.0).float().to(args.ip2p_device)
+                    cur_image = (cur_image * 255.0).float().to(args.ip2p_device)
+                    cur_image_cond = (cur_image_cond * 255.0).float().to(args.ip2p_device)
+
+                    padder = InputPadder(cur_image.shape)
+                    ref_image, ref_image_cond, cur_image, cur_image_cond = padder.pad(ref_image, ref_image_cond, cur_image, cur_image_cond)
+
+                    _, flow_fwd_ref = raft(ref_image_cond, cur_image_cond, iters=20, test_mode=True) 
+                    _, flow_bwd_ref = raft(cur_image_cond, ref_image_cond, iters=20, test_mode=True)
+
+                    flow_fwd_ref = padder.unpad(flow_fwd_ref[0]).cpu().numpy().transpose(1, 2, 0) 
+                    flow_bwd_ref = padder.unpad(flow_bwd_ref[0]).cpu().numpy().transpose(1, 2, 0) 
+
+                    ref_image = padder.unpad(ref_image[0]).cpu().numpy().transpose(1, 2, 0).astype(np.uint8) 
+                    cur_image = padder.unpad(cur_image[0]).cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
+
+                    mask_bwd_ref = compute_bwd_mask(flow_fwd_ref, flow_bwd_ref) # (h, w)
+                    warp_cur_from_ref_proj = warp_flow(ref_image, flow_bwd_ref) # (h, w, c)
+
+                    warp_image = warp_cur_from_ref_proj * mask_bwd_ref[..., None] + cur_image * (1 - mask_bwd_ref[..., None]) # (h, w, c)
+                    warp_image = torch.from_numpy(warp_image / 255.0).to(images) # (h, w, c)
+                    if warp_image.shape[:2] != (H, W):
+                        warp_image = rearrange(warp_image, 'H W C -> 1 C H W')
+                        warp_image = F.interpolate(warp_image, size=(H, W), mode='bilinear',align_corners=False)
+                        warp_image = rearrange(warp_image, '1 C H W -> H W C')
+                    images[i] = warp_image.permute(2, 0, 1) # (h, w, c)
+                    
+                torchvision.utils.save_image(images, f'output/vis/{tag}/images_flow_warped.png', nrow=images.shape[0], normalize=True)
+                torchvision.utils.save_image(images_cond, f'output/vis/{tag}/images_flow_cond.png', nrow=images_cond.shape[0], normalize=True)
+
+                images = torch.cat([keyframe_image, images], dim=0) # (1 + seq_len, C, H, W)
+                images_cond = torch.cat([keyframe_image_cond, images_cond], dim=0) # (1 + seq_len, C, H, W)
+
+                images_flow = ip2p.edit_sequence(
+                    images=images.unsqueeze(0).to(args.ip2p_device), # (1, f+1, C, H, W)
+                    images_cond=images_cond.unsqueeze(0).to(args.ip2p_device), # (1, f+1, C, H, W)
+                    guidance_scale=args.guidance_scale,
+                    image_guidance_scale=args.image_guidance_scale,
+                    diffusion_steps=args.refine_diffusion_steps,
+                    prompt=args.prompt,
+                    noisy_latent_type="noisy_latent",
+                    T=args.refine_num_steps,
+                ) # (1, C, f+1, H, W)
+
+                images_flow = rearrange(images_flow, '1 C f H W -> f C H W').cpu().to(all_rgbs.dtype)
+                images_flow = images_flow[1:] # (f, C, H, W)
+
+                if images_flow.shape[-2:] != (H, W):
+                    images_flow = F.interpolate(images_flow, size=(H, W), mode='bilinear', align_corners=False)
+                
+                torchvision.utils.save_image(images_flow, f'output/vis/{tag}/images_flow_refine.png', nrow=images_flow.shape[0], normalize=True)
+
+                images_flow = images_flow.to(all_rgbs)
+                with data_lock:
+                    all_rgbs[selected_frame_idxs, cam_idx] = images_flow
+
+    # fork a new thread to edit all frames(time + space)
+    thread_all_frames_update = threading.Thread(target=all_frame_update, name='dataset_update')
+    thread_all_frames_update.start()
+    print('all frame update thread started')
+
+    pbar = tqdm(range(args.n_iters), miniters=args.progress_refresh_rate, file=sys.stdout)
+
+    timestamp = 0
+    for iteration in pbar:
+
+        with data_lock:
+            rgb_train = all_rgbs[timestamp] # [num_cam, C, H, W]
+
+        _, viewpoint = time_cam_dataset.next_view(timestamp)
+
+        for i in range(num_cam):
+
+            viewpoint_cam = viewpoint[i]
+            viewpoint_cam = viewpoint_cam.cuda()
+            
+            rendering = render(viewpoint[i], gaussians, pipe, background)["render"] # [C, H, W]
+            Ll1 = l1_loss(rendering, rgb_train[i])
+            Lssim = 1.0 - ssim(rendering, rgb_train[i])
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * Lssim
+
+            loss.back()
+
+            gaussians.optimizer.step()
+            gaussians.optimizer.zero_grad(set_to_none = True)
+            if pipe.env_map_res and iteration < pipe.env_optimize_until:
+                env_map_optimizer.step()
+                env_map_optimizer.zero_grad(set_to_none = True)
+
+        timestamp += 1
+        if timestamp == dataset.num_frames:
+            timestamp = 0
+        
+        if (iteration in args.save_iterations):
+            print("\n[ITER {}] Saving Gaussians".format(iteration))
+            scene.save(iteration)
     
 
 if __name__ == '__main__':
@@ -369,9 +537,25 @@ if __name__ == '__main__':
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument("--config", type=str, default="configs/dynerf/coffee_martini.yaml")
+    parser.add_argument("--config", type=str, default="configs/dynerf/coffee_martini_edit.yaml")
     parser.add_argument("--chkpnt_path", type=str, default="output/N3V/coffee_martini/chkpnt_best.pth")
     parser.add_argument("--seed", type=int, default=6666)
+
+    parser.add_argument("--progress_refresh_rate", type=int, default=10,
+                        help='how many iterations to show psnrs or iters')
+    
+    # parser.add_argument("--vis")
+    
+    # TODO
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[70, 200])
+
+    # loader options
+    parser.add_argument("--batch_size", type=int, default=4096)
+    parser.add_argument("--patch_size", type=int, default=32)
+    # TODO
+    parser.add_argument("--n_iters", type=int, default=300) # 30000
+    parser.add_argument("--n_keyframe_iters", type=int, default=800)
+    parser.add_argument('--dataset_name', type=str, default='blender', choices=['n3dv_dynamic','deepview_dynamic',])
 
     # edit params
     parser.add_argument("--editted_path", type=str, default="output/editted_N3V/coffee_martini")

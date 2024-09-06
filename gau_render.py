@@ -46,7 +46,7 @@ if __name__ == '__main__':
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument("--config", type=str, default="configs/dynerf/coffee_martini.yaml")
+    parser.add_argument("--config", type=str, default="configs/dynerf/coffee_martini_render.yaml")
     parser.add_argument("--chkpnt_path", type=str, default="output/N3V/coffee_martini/chkpnt_best.pth")
     parser.add_argument("--seed", type=int, default=6666)
     args = parser.parse_args()

@@ -546,6 +546,8 @@ def nerf_editing(args):
             if sample_images_edit.shape[-2:] != (H, W):
                 sample_images_edit = F.interpolate(sample_images_edit, size=(H, W), mode='bilinear', align_corners=False)
                 
+            torchvision.utils.save_image(sample_images_edit, f'{tag}_{warm_up_idx}_sample_images_edit_before.png', nrow=sample_images_edit.shape[0], normalize=True)
+
             # warp average among sample images (spatial warp)
             for idx_cur, i in enumerate(sample_idxs):
                 warp_average = torch.zeros((H, W, 3), dtype=torch.float32, device=device)
@@ -568,7 +570,7 @@ def nerf_editing(args):
                 warp_average[average_mask] /= weights_mask[average_mask].unsqueeze(-1)
                 sample_images_edit[idx_cur].permute(1, 2, 0)[average_mask] = warp_average[average_mask]
                 
-            torchvision.utils.save_image(sample_images_edit, f'{tag}_sample_images_edit.png', nrow=sample_images_edit.shape[0], normalize=True)
+            torchvision.utils.save_image(sample_images_edit, f'{tag}_{warm_up_idx}_sample_images_edit_after.png', nrow=sample_images_edit.shape[0], normalize=True)
             torchvision.utils.save_image(remain_images, f'{tag}_remain_images.png', nrow=remain_images.shape[0], normalize=True)
                 
             remain_images_warped = remain_images.clone()
@@ -634,7 +636,7 @@ def nerf_editing(args):
             remain_images_update = rearrange(remain_images_warped, 'f C H W -> f H W C').to(allrgbs)  
             allrgbs.view(num_frame, num_cam, H, W, -1)[key_frame][remain_idxs] = remain_images_update
                 
-    key_frame_update(key_frame=0, warp_ratio=0.5, warm_up_steps=12)
+    key_frame_update(key_frame=0, warp_ratio=0.5, warm_up_steps=2)
     print('Key frame editing done!')
     
     keyframe_images = allrgbs.view(num_frame, num_cam, H, W, -1)[0] # (num_cam, H, W, 3)
