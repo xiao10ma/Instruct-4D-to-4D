@@ -45,7 +45,7 @@ class Scene:
         self.test_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            scene_info = sceneLoadTypeCallbacks["Colmap"](self.num_frames, args.edit_task, args.source_path, args.images, args.eval, num_pts_ratio=num_pts_ratio)
+            scene_info = sceneLoadTypeCallbacks["Colmap"](self.num_frames, args.edit_task, args.source_path, args.objects, args.images, args.eval, num_pts_ratio=num_pts_ratio)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](self.num_frames, args.edit_task, args.source_path, args.white_background, args.eval, num_pts=num_pts, time_duration=time_duration, extension=args.extension, num_extra_pts=args.num_extra_pts, frame_ratio=args.frame_ratio, dataloader=args.dataloader)
@@ -74,9 +74,9 @@ class Scene:
 
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
-            self.train_cameras[resolution_scale], self.train_time_cam_images = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale], self.test_time_cam_images = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
 
         if args.loaded_pth:
             print("Creating from pth")
@@ -91,14 +91,21 @@ class Scene:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration):
-        torch.save((self.gaussians.capture(), iteration), self.model_path + "/chkpnt" + str(iteration) + ".pth")
+        torch.save((self.gaussians.capture(), iteration), os.path.join(self.model_path, f"chkpnt_{iteration}.pth"))
+
+    def save_edit(self, iteration):
+        torch.save((self.gaussians.capture(), iteration), os.path.join(self.model_path, f"edit_chkpnt_{iteration}.pth"))
 
     def getTrainCameras(self, scale=1.0):
+        # TODO
         return CameraDataset(self.train_cameras[scale].copy(), self.white_background, self.num_frames)
-        
+        # return CameraDataset(self.train_cameras[scale].copy(), self.white_background)
+
     def getTestCameras(self, scale=1.0):
+        # TODO
         return CameraDataset(self.test_cameras[scale].copy(), self.white_background, self.num_frames)
-    
+        # return CameraDataset(self.test_cameras[scale].copy(), self.white_background)
+
     def getKeyCameras(self, scale=1.0):
         key_frame_cameras = self.train_cameras[scale][0:len(self.train_cameras[scale]):self.num_frames]
         return CameraDataset(key_frame_cameras.copy(), self.white_background, self.num_frames)

@@ -13,6 +13,7 @@ from scene.cameras import Camera
 import numpy as np
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
+import torch
 
 WARNED = False
 
@@ -59,6 +60,16 @@ def loadCam(args, id, cam_info, resolution_scale):
     else:
         depth = None
 
+    # TODO：引入 object path
+    # return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
+    #               FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
+    #               image=gt_image, gt_alpha_mask=loaded_mask,
+    #               image_name=cam_info.image_name, uid=id, data_device=args.data_device, 
+    #               timestamp=cam_info.timestamp,
+    #               cx=cx, cy=cy, fl_x=fl_x, fl_y=fl_y, depth=depth, resolution=resolution, image_path=cam_info.image_path,
+    #               meta_only=args.dataloader,
+    #               objects=torch.from_numpy(np.array(cam_info.objects.resize(resolution)))
+    #               )
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
                   image=gt_image, gt_alpha_mask=loaded_mask,
@@ -70,13 +81,11 @@ def loadCam(args, id, cam_info, resolution_scale):
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = []
-    image_list = []
     for id, c in enumerate(cam_infos):
         cam = loadCam(args, id, c, resolution_scale)
         camera_list.append(cam)
-        image_list.append(cam.image)
 
-    return camera_list, image_list
+    return camera_list
 
 def camera_to_JSON(id, camera : Camera):
     Rt = np.zeros((4, 4))

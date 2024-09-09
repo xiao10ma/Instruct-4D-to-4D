@@ -4,7 +4,7 @@ num_pts: 300_000
 num_pts_ratio: 1.0
 rot_4d: True
 force_sh_3d: False
-batch_size: 4
+batch_size: 1
 exhaust_test: True
 exp_name: 'coffee_martini'
 cache_path: 'output/N3V/cache'
@@ -23,8 +23,12 @@ ModelParams:
   loaded_pth: ""
   frame_ratio: 1
   dataloader: True
+  # edit
   edit_task: True
-  num_frames: 2
+  num_frames: 200
+
+  # segment
+  num_classes: 256
 
 PipelineParams:
   convert_SHs_python: False
@@ -61,3 +65,8 @@ OptimizationParams:
   lambda_opa_mask: 0.0
   lambda_rigid: 0.0
   lambda_motion: 0.0
+  reg3d_interval: 5
+  reg3d_k: 5
+  reg3d_lambda_val: 2
+  reg3d_max_points: 300000
+  reg3d_sample_size: 1000

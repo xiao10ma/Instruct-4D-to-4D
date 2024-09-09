@@ -21,6 +21,7 @@ class Camera:
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", timestamp = 0.0,
                  cx=-1, cy=-1, fl_x=-1, fl_y=-1, depth=None, resolution=None, image_path=None, meta_only=False,
+                 objects=None, style_transfer=False
                  ):
 
         self.uid = uid
@@ -70,7 +71,19 @@ class Camera:
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
         
+        # 4dgs
         self.timestamp = timestamp
+
+        # segment / object
+        if objects is not None:
+            self.objects = objects
+        else:
+            self.objects = None
+        
+        if style_transfer:
+            # TODO 原本这里有 clone，是 original_image.cloen，我不太清楚，做到这里再写
+            # 见 gaussian grouping
+            self.transfer_image = self.image
         
     def get_rays(self):
         grid = create_meshgrid(self.image_height, self.image_width, normalized_coordinates=False)[0] + 0.5

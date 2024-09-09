@@ -59,8 +59,15 @@ class ModelParams(ParamGroup):
         self.loaded_pth = ""
         self.frame_ratio = 1
         self.dataloader = False
+        
+        # edit
         self.edit_task = False
         self.num_frames = 300
+
+        # segment
+        self.num_classes = 256
+        self.objects = "object_mask"
+
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -106,6 +113,14 @@ class OptimizationParams(ParamGroup):
         self.lambda_opa_mask = 0.0
         self.lambda_rigid = 0.0
         self.lambda_motion = 0.0
+
+        # 3d regularization (KL divergence between the neighbour)
+        self.reg3d_interval = 5
+        self.reg3d_k = 5
+        self.reg3d_lambda_val = 2
+        self.reg3d_max_points = 300000
+        self.reg3d_sample_size = 1000
+
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

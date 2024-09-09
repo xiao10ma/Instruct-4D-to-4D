@@ -29,6 +29,27 @@ from multiprocessing.pool import ThreadPool
 import imagesize
 import ipdb
 
+# TODO: 统一的引入 object， object path
+# class CameraInfo(NamedTuple):
+#     uid: int
+#     R: np.array
+#     T: np.array
+#     FovY: np.array
+#     FovX: np.array
+#     image: np.array
+#     depth: np.array
+#     image_path: str
+#     image_name: str
+#     width: int
+#     height: int
+#     objects: np.array
+#     objects_path: str
+#     timestamp: float = 0.0
+#     fl_x: float = -1.0
+#     fl_y: float = -1.0
+#     cx: float = -1.0
+#     cy: float = -1.0
+
 class CameraInfo(NamedTuple):
     uid: int
     R: np.array
@@ -41,6 +62,8 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    # objects: np.array
+    # objects_path: str
     timestamp: float = 0.0
     fl_x: float = -1.0
     fl_y: float = -1.0
@@ -77,7 +100,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_folder):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -110,8 +133,14 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(image_path)
 
+        # object
+        objects_path = os.path.join(objects_folder, image_name + '.png')
+        objects = Image.open(objects_path) if os.path.exists(objects_path) else None
+
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+                              image_path=image_path, image_name=image_name, width=width, height=height, 
+                              depth=None,
+                              objects=objects, objects_path=objects_path)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -148,7 +177,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(num_frames, edit_task, path, images, eval, llffhold=8, num_pts_ratio=1.0):
+def readColmapSceneInfo(num_frames, edit_task, path, object_path, images, eval, llffhold=8, num_pts_ratio=1.0):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -161,7 +190,8 @@ def readColmapSceneInfo(num_frames, edit_task, path, images, eval, llffhold=8, n
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    object_dir = "object_mask" if object_path == None else object_path
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir), objects_folder=os.path.join(path, object_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:

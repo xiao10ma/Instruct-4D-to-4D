@@ -1,3 +1,14 @@
+#
+# Copyright (C) 2023, Inria
+# GRAPHDECO research group, https://team.inria.fr/graphdeco
+# All rights reserved.
+#
+# This software is free for non-commercial, research and evaluation use 
+# under the terms of the LICENSE.md file.
+#
+# For inquiries contact  george.drettakis@inria.fr
+#
+
 import os
 import random
 import torch
@@ -339,7 +350,7 @@ def setup_seed(seed):
      random.seed(seed)
      torch.backends.cudnn.deterministic = True
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
@@ -363,11 +374,13 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=6666)
     parser.add_argument("--exhaust_test", action="store_true")
 
+    parser.add_argument("--exp_name", type=str, default="")
+    parser.add_argument("--cache_path", type=str, default="")
+    
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
-
+        
     cfg = OmegaConf.load(args.config)
-
     def recursive_merge(key, host):
         if isinstance(host[key], DictConfig):
             for key1 in host[key].keys():
@@ -377,16 +390,17 @@ if __name__ == '__main__':
             setattr(args, key, host[key])
     for k in cfg.keys():
         recursive_merge(k, cfg)
-
+        
     if args.exhaust_test:
         args.test_iterations = args.test_iterations + [i for i in range(0,op.iterations,500)]
     
-    # Set up seed
     setup_seed(args.seed)
-
+    
     print("Optimizing " + args.model_path)
 
+    # Initialize system state (RNG)
     safe_state(args.quiet)
+
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.start_checkpoint, args.debug_from,
              args.gaussian_dim, args.time_duration, args.num_pts, args.num_pts_ratio, args.rot_4d, args.force_sh_3d, args.batch_size)
